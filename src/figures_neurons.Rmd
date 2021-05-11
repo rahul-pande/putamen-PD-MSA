@@ -1,0 +1,130 @@
+---
+title: "R Notebook - putamen subtype clustering"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "../")
+# knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.retina = T)
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+library(purrr)
+library(cowplot)
+library(tibble)
+library(ggplot2)
+library(scales)
+library(lattice)
+
+set.seed(12345)
+```
+
+
+```{r}
+putamen_neurons <- readRDS("../data/clustered_data/putamen_neurons.rds")
+Idents(putamen_neurons) <- "cell_type"
+putamen_neurons <- subset(putamen_neurons, cell_type != "Exclude")
+```
+
+
+```{r}
+DimPlot(putamen_neurons, group.by = "cell_type",
+        split.by = "stim", ncol = 1,
+        pt.size = 0.1, label = F, repel = T,
+        label.size = 4, reduction = "tsne") +
+  facet_wrap(~stim, strip.position = "left", ncol = 1) +
+  guides(color=guide_legend(ncol=1, override.aes = list(size=4))) +
+  theme( axis.line=element_blank(),
+         strip.text = element_text(size = rel(1.2)),
+         axis.text.x=element_blank(),
+         axis.text.y=element_blank(),
+         axis.ticks=element_blank(),
+         axis.title.x=element_blank(),
+         axis.title.y=element_blank(),
+         legend.text=element_text(size=rel(1.1)),
+         legend.position = "left",
+         plot.title = element_blank(),
+         panel.background=element_blank(),
+         panel.border=element_blank(),
+         panel.grid.major=element_blank(),
+         panel.grid.minor=element_blank(),
+         plot.background=element_blank())
+```
+
+```{r warning=F, message=F}
+Idents(putamen_neurons) <- "cell_type"
+
+marker.genes <- c( "RBFOX3", "SLC17A7",
+                   "PPP1R1B", "NRGN", "GAD1", "GAD2",
+                   "DRD1", "DRD2",
+                   # "LUZP2",
+                   "ADARB2",
+                   # "SOX6",
+                   "LHX6", "NXPH1",
+                   "NELL1", "FGFR2",
+                   "CUX2", "KCNC2"
+                   # "SEMA5A",
+                   # "LINGO2",
+                   # "BCAS1", "OPALIN", "HAPLN2",
+                   )
+VlnPlot(subset(putamen_neurons, stim == "Control"),
+        fill.by = "ident",
+        features = marker.genes, stack = T,
+        flip = T, assay = "RNA") +
+  theme(axis.title.x = element_blank()) +
+  NoLegend()
+```
+
+
+Neurons proportion
+```{r}
+cell.idents <- data.frame(cluster_id = putamen_neurons$seurat_clusters,
+                          sample_id = putamen_neurons$orig.ident,
+                          group_id = putamen_neurons$stim,
+                          cluster_type = putamen_neurons$cell_type
+                          )
+
+cell.agg <- cell.idents %>%
+  group_by(group_id) %>%
+  mutate(sample_size = length(group_id)) %>%
+  group_by(group_id, cluster_type) %>%
+  mutate(proportion = length(cluster_type)/sample_size) %>%
+  dplyr::select(group_id, cluster_type, proportion) %>%
+  distinct()
+
+colors <- c(sapply(c("Greens", "Blues", "Reds"),
+                   function(pal){
+                     RColorBrewer::brewer.pal(n = 6, name = pal)[3:5]
+                     }
+                   )
+            )
+colors <- colors[c(2,5,8)]
+
+ggplot(cell.agg, aes(x = cluster_type, y = proportion, fill = group_id)) +
+  geom_bar(width = 0.5, stat = "identity", position = position_fill()) +
+  scale_fill_manual(values = colors) +
+  labs(y = "scaled proportion") +
+  scale_y_continuous(breaks = c(0, 0.33, 0.66, 1)) +
+  geom_hline(yintercept = 0.33, linetype='dotted', color = "grey30") +
+  geom_hline(yintercept = 0.66, linetype='dotted', color = "grey30") +
+  theme_cowplot() +
+  theme(axis.text.x = element_text(angle = 50, vjust = 0.5, size = rel(1.5)),
+        # axis.text.y = element_blank(),
+        # axis.ticks.y = element_blank(),
+        axis.title.y = element_text(size = rel(1.5)),
+        # axis.line.y = element_blank(),
+        axis.title.x = element_blank())
+
+```

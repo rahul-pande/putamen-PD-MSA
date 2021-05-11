@@ -1,0 +1,279 @@
+---
+title: "R Notebook - putamen subtype clustering"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+library("knitr")
+knitr::opts_knit$set(root.dir = "../")
+# knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.retina = T)
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+library(purrr)
+library(cowplot)
+library(tibble)
+library(ggplot2)
+library(scales)
+library(lattice)
+
+
+set.seed(12345)
+```
+
+
+```{r}
+data_celltypes <- readRDS("./data/overall_clustered_data/data_celltypes_annotated.rds")
+data_celltypes$cell_type <- Idents(data_celltypes)
+
+data_celltypes <- subset(data_celltypes, cell_type != "Exclude")
+
+DefaultAssay(data_celltypes) <- "RNA"
+```
+
+
+Nuclei Count Plot
+```{r}
+ggplot(data_celltypes@meta.data,
+       aes_string(y = "orig.ident", fill = "stim")) +
+  labs(x = "", y = "Sample", caption = "Nuclei Count") +
+  geom_bar() +
+  scale_fill_manual("stim", values = c("Control" = "#74C476",
+                                       "MSA" = "#6BAED6",
+                                       "PD" = "#FB6A4A")) +
+  scale_y_discrete(limits = c("PD9", "PD4", "PD2",
+                              "MSA10", "MSA7", "MSA5",
+                              "CTR8", "CTR3", "CTR1")) +
+  theme_cowplot() +
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.title = element_blank(),
+        axis.title = element_text(size = rel(1.1)),
+        plot.caption = element_text(size = rel(1.1)))
+
+```
+
+QC Plot
+```{r}
+VlnPlot(data_celltypes, group.by = "stim",
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+        assay = "RNA", cols = c("#74C476", "#6BAED6", "#FB6A4A"),
+        pt.size = 0)
+```
+
+Important genes violin plot
+```{r}
+VlnPlot(data_celltypes,
+        idents = c("Oligodendrocyte", "Neuron", "Astrocyte", "Microglia", "OPC"),
+        features = c("SNCA", "MAPT", "APP", "LRRK2", "BAG3", "APOE"),
+        group.by = "cell_type",
+        split.by = "stim",
+        stack = T,
+        flip = T,
+        cols = c("#74C476", "#6BAED6", "#FB6A4A")) +
+  theme(axis.title.x = element_blank(), legend.position = "bottom")
+```
+
+Major cell type plot
+```{r}
+DimPlot(data_celltypes, group.by = "cell_type",
+        pt.size = 0.01, label = F, repel = T, raster = F,
+        label.size = 4, reduction = "tsne") +
+   theme(axis.line=element_blank(),
+         axis.text.x=element_blank(),
+         axis.text.y=element_blank(),
+         axis.ticks=element_blank(),
+         axis.title.x=element_blank(),
+         axis.title.y=element_blank(),
+         plot.title = element_blank(),
+         panel.background=element_blank(),
+         panel.border=element_blank(),
+         panel.grid.major=element_blank(),
+         panel.grid.minor=element_blank(),
+         plot.background=element_blank())
+```
+
+Integration stim plot
+```{r}
+DimPlot(data_celltypes,
+        pt.size = 0.5, label = F, repel = T,
+        group.by = "orig.ident", split.by = "stim",
+        label.size = 4, reduction = "tsne",
+        shuffle = F, raster = T) +
+   theme(axis.line=element_blank(),
+         axis.text.x=element_blank(),
+         axis.text.y=element_blank(),
+         axis.ticks=element_blank(),
+         axis.title.x=element_blank(),
+         axis.title.y=element_blank(), plot.title = element_blank(),
+         panel.background=element_blank(),
+         panel.border=element_blank(),
+         panel.grid.major=element_blank(),
+         panel.grid.minor=element_blank(),
+         plot.background=element_blank())
+```
+
+Major markers violin plot
+```{r}
+major.markers <- c("BCAS1", "OPALIN", "HAPLN2",
+                   "RBFOX3",
+                   # "MEG3",
+                   "GFAP", "AQP4",
+                   # "GFAP",
+                   # "TYROBP", "CTSS", "C1QA", "CD74",
+                   "PDGFRA", "VCAN",
+                   "CSF1R", "CD74",
+                   # "CSPG4",
+                   # "FLT1", "NOSTRIN", "SRGN",
+                   "COLEC12", "DCN", "PDGFRB"
+                   )
+
+VlnPlot(subset(data_celltypes, stim == "Control"),
+        features = major.markers,
+        group.by = "cell_type",
+        stack = T, assay = "RNA",
+        flip = T) +
+  theme(axis.title.x = element_blank()) + NoLegend()
+```
+
+Cell type proportions
+```{r}
+cell.idents <- data.frame(cluster_id = data_celltypes$seurat_clusters,
+                          sample_id = data_celltypes$orig.ident,
+                          group_id = data_celltypes$stim,
+                          cluster_type = data_celltypes$cell_type
+                          )
+
+cell.agg <- cell.idents %>%
+  group_by(group_id) %>%
+  mutate(sample_size = length(group_id)) %>%
+  group_by(group_id, cluster_type) %>%
+  mutate(proportion = length(cluster_type)/sample_size) %>%
+  dplyr::select(group_id, cluster_type, proportion) %>%
+  distinct()
+
+colors <- c(sapply(c("Greens", "Blues", "Reds"),
+                   function(pal){
+                     RColorBrewer::brewer.pal(n = 6, name = pal)[3:5]
+                     }
+                   )
+            )
+colors <- colors[c(2,5,8)]
+
+ggplot(cell.agg, aes(x = cluster_type, y = proportion, fill = group_id)) +
+  geom_bar(width = 0.5, stat = "identity", position = position_fill()) +
+  scale_fill_manual(values = colors) +
+  labs(y = "scaled proportion") +
+  scale_y_continuous(breaks = c(0, 0.33, 0.66, 1)) +
+  geom_hline(yintercept = 0.33, linetype='dotted', color = "grey30") +
+  geom_hline(yintercept = 0.66, linetype='dotted', color = "grey30") +
+  theme_cowplot() +
+  theme(axis.text.x = element_text(angle = 50, vjust = 0.5, size = rel(1.5)),
+        # axis.text.y = element_blank(),
+        # axis.ticks.y = element_blank(),
+        axis.title.y = element_text(size = rel(1.5)),
+        # axis.line.y = element_blank(),
+        axis.title.x = element_blank())
+
+```
+
+```{r}
+# mapt_expression_dot
+dot.plot.gene <- c("APOE")
+
+interim.plot <- DotPlot(data_celltypes, features = dot.plot.gene, group.by = "stim", split.by = "cell_type",
+        idents = c("Oligodendrocyte", "Neuron", "Astrocyte", "Microglia", "OPC"),
+        assay = "RNA",
+        cols = RColorBrewer::brewer.pal(10, "Set3")
+        )
+data.plot <- as.data.frame(interim.plot["data"])
+
+data.plot <- data.plot %>%
+  separate(data.id, c("data.stim","data.celltype"), sep = "_")
+
+ggplot(data.plot, mapping = aes_string(x = "data.stim", y = "data.celltype")) +
+  geom_point(mapping = aes_string(size = "data.pct.exp",
+                                  color = "data.avg.exp")) +
+  scale_radius(range = c(0, 7), limits = c(0, 100)) +
+  scale_color_gradient(low = "lightgrey", high = "darkblue") +
+  scale_x_discrete(position = "top") +
+  
+  guides(size = guide_legend(title = "Percent Expressed")) +
+  guides(color = guide_colorbar(title = "Average Expression")) +
+  
+  theme_cowplot() + ggtitle("", subtitle = paste(dot.plot.gene,
+                                                 "Expression", sep = " ")
+                            ) +
+  
+  theme(axis.text.x = element_text(face = "bold", angle = 45, hjust = 0.5),
+        axis.text.y = element_text(size = rel(1.2), face = "bold", angle = 0),
+        axis.line=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.y = element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        plot.background=element_blank(),
+        axis.title.x = element_blank(),
+        plot.title = element_blank(),
+        plot.subtitle = element_text(size = rel(1.5), face = "bold"))
+```
+
+
+Feature stim plot all
+```{r}
+Idents(data_celltypes) <- "cell_type"
+plot.list <- FeaturePlot(data_celltypes,
+                         features = c("SNCA", "LRRK2", "MAPT", "APP"),
+                         pt.size = 0.1,
+                         label = F,
+                         keep.scale = "feature",
+                         split.by = "stim", by.col = T,
+                         order = T, reduction = "tsne",
+                         combine = T)
+
+plot.list$patches$plots <- lapply(plot.list$patches$plots, function(plt){
+  plt + NoAxes() + NoGrid() + theme(
+    plot.margin = margin(l=0, b=0, r=0, t=0)
+  )
+  })
+
+plot.list <- plot.list + NoAxes() + NoGrid() + theme(
+  plot.margin = margin(l=0, b=0, r=0, t=0)
+)
+
+plot.list
+```
+
+
+```{r}
+DimPlot(data_celltypes, group.by = "cell_type",
+        pt.size = 0.01, label = F, repel = T, raster = F,
+        label.size = 4, reduction = "tsne") +
+   theme(axis.line=element_blank(),
+         axis.text.x=element_blank(),
+         axis.text.y=element_blank(),
+         axis.ticks=element_blank(),
+         axis.title.x=element_blank(),
+         axis.title.y=element_blank(),
+         plot.title = element_blank(), legend.position = "bottom",
+         panel.background=element_blank(),
+         panel.border=element_blank(),
+         panel.grid.major=element_blank(),
+         panel.grid.minor=element_blank(),
+         plot.background=element_blank()) +
+  guides(color = guide_legend(ncol=1, override.aes = list(size=4)))
+```
+

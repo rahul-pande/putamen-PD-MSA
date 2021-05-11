@@ -1,0 +1,286 @@
+---
+title: "trajectory_analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "../")
+```
+
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+library(purrr)
+library(cowplot)
+library(tibble)
+library(ggplot2)
+library(scales)
+library(lattice)
+library(monocle)
+
+set.seed(12345)
+```
+
+
+```{r}
+combined <- readRDS("../data/clustered_data/putamen_microglia.rds")
+combined <- subset(combined, idents = c("MG1", "MG2", "Macrophage") )
+# combined <- subset(combined, idents = c(0,1,3) )
+```
+
+```{r message=FALSE, warning=FALSE}
+DefaultAssay(combined) <- "RNA"
+
+expr_matrix <- combined[["RNA"]]@data
+
+sample_sheet <- combined@meta.data
+sample_sheet$CellType <- sample_sheet$cell_type
+sample_sheet$Cluster <- sample_sheet$seurat_clusters
+
+genes <- rownames(combined)
+gene_annotation <- data.frame(gene_short_name = genes, row.names = genes, stringsAsFactors = F)
+
+pd <- new("AnnotatedDataFrame", data = sample_sheet)
+fd <- new("AnnotatedDataFrame", data = gene_annotation)
+
+putamen_subset_cds <- newCellDataSet(as.matrix(expr_matrix),
+                                          phenoData = pd,
+                                          featureData = fd)
+
+putamen_subset_cds <- estimateSizeFactors(putamen_subset_cds)
+putamen_subset_cds <- estimateDispersions(putamen_subset_cds, cores = 8)
+
+
+rm(expr_matrix)
+rm(sample_sheet)
+rm(genes)
+rm(pd)
+rm(fd)
+```
+
+
+```{r}
+putamen_subset_cds <- detectGenes(putamen_subset_cds, min_expr = 0.1)
+
+fData(putamen_subset_cds)$use_for_ordering <-
+    fData(putamen_subset_cds)$num_cells_expressed > 0.05 * ncol(putamen_subset_cds)
+```
+
+
+```{r}
+# diff_test_res_stim_cluster <- differentialGeneTest(putamen_subset_cds,
+#                         fullModelFormulaStr = "~ Cluster + stim",
+#                         reducedModelFormulaStr = "~ orig.ident",
+#                         verbose = 5)
+# 
+# saveRDS(diff_test_res_stim_cluster,
+#         "../data/monocle/putamen_microglia_ordering_genes_stim_cluster.rds")
+
+diff_test_res_stim_cluster <- readRDS("../data/monocle/putamen_microglia_ordering_genes_stim_cluster.rds")
+
+putamen_ordering_genes <-
+row.names(diff_test_res_stim_cluster)[order(diff_test_res_stim_cluster$qval)][1:1100]
+
+putamen_subset_cds <-
+    setOrderingFilter(putamen_subset_cds,
+        ordering_genes = putamen_ordering_genes)
+
+plot_ordering_genes(putamen_subset_cds)
+```
+
+```{r}
+putamen_subset_cds <-
+    reduceDimension(putamen_subset_cds, max_components = 2,
+                    method = 'DDRTree')
+
+putamen_subset_cds <-
+    orderCells(putamen_subset_cds)
+
+plot_cell_trajectory(putamen_subset_cds, color_by = "CellType") +
+  facet_grid(CellType~stim)
+```
+
+Hyper parameter search
+```{r}
+# for(num_genes in seq(500, 1500, 50)){
+#     diff_test_res_stim_cluster <- readRDS("../data/monocle/putamen_microglia_ordering_genes_stim_cluster.rds")
+# 
+#   putamen_ordering_genes <-
+#   row.names(diff_test_res_stim_cluster)[order(diff_test_res_stim_cluster$qval)][1:num_genes]
+# 
+#   putamen_subset_cds <-
+#       setOrderingFilter(putamen_subset_cds,
+#           ordering_genes = putamen_ordering_genes)
+#   putamen_subset_cds <-
+#       reduceDimension(putamen_subset_cds, max_components = 2, method = 'DDRTree')
+# 
+#   putamen_subset_cds <-
+#       orderCells(putamen_subset_cds)
+# 
+#   plot_cell_trajectory(putamen_subset_cds, color_by = "CellType") +
+#   facet_grid(CellType~stim)
+#   ggsave(filename = paste0("../plots/trajectory/microglia/orig.ident_reduced_microglia_trajectory_", num_genes, ".png"))
+#   gc()
+# }
+```
+
+
+```{r}
+plot_cell_trajectory(putamen_subset_cds, color_by = c("CellType")) +
+  facet_wrap(~stim)
+plot_cell_trajectory(putamen_subset_cds, color_by = c("stim")) +
+  facet_wrap(~stim)
+
+plot_cell_trajectory(putamen_subset_cds, color_by = c("Pseudotime")) +
+  facet_wrap(~stim)
+
+plot_cell_trajectory(putamen_subset_cds,
+                     color_by = c("State"),
+                     cell_size = 0.7) +
+  facet_wrap(~stim) +
+  xlab("Pseudotime Component 1") +
+  ylab("Pseudotime Component 2") +
+  theme(legend.position = "right") +
+  ggtitle(element_text("Microglia Trajectory"))
+```
+
+```{r}
+# putamen_subset_cds <-
+#     orderCells(putamen_subset_cds, root_state = 1)
+```
+
+```{r}
+putamen_subset_cds[,putamen_subset_cds@auxOrderingData$DDRTree$root_cell]$State
+```
+```{r}
+putamen_subset_cds$TrajectoryState <- recode(putamen_subset_cds$State,
+                                             `1` = "branch-right",
+                                             `2` = "branch-up",
+                                             `3` = "branch-left")
+```
+
+```{r}
+plot_cell_trajectory(putamen_subset_cds,
+                     color_by = c("TrajectoryState"),
+                     cell_size = 0.4) +
+  facet_wrap(~stim) +
+  xlab("Pseudotime Component 1") +
+  ylab("Pseudotime Component 2") +
+  theme(legend.position = "bottom",
+        strip.text.x = element_text(size = rel(1.3), face = "bold"),
+        strip.text.y = element_text(size = rel(1.3), face = "bold"),
+        legend.text = element_text(size = rel(1.3), face = "bold"),
+        axis.title = element_text(size = rel(1.3))
+        ) +
+  guides(color = guide_legend(override.aes = list(size=4) ))
+```
+
+```{r}
+# saveRDS(putamen_subset_cds, "../data/monocle/putamen_subset_cds_microglia.rds")
+putamen_subset_cds <- readRDS("../data/monocle/putamen_subset_cds_microglia.rds")
+```
+
+
+```{r}
+plot_cell_trajectory(putamen_subset_cds, color_by = c("CellType"), cell_size = 0.4) +
+  facet_wrap(~stim) +
+  xlab("Pseudotime Component 1") +
+  ylab("Pseudotime Component 2") +
+  theme(legend.position = "bottom",
+        strip.text.x = element_text(size = rel(1.3), face = "bold"),
+        strip.text.y = element_text(size = rel(1.3), face = "bold"),
+        legend.text = element_text(size = rel(1.3), face = "bold"),
+        axis.title = element_text(size = rel(1.3))
+        ) +
+  guides(color = guide_legend(override.aes = list(size=4)) )
+```
+
+```{r}
+markers = c("P2RY12", "CX3CR1",
+            "SNCA", "LRRK2",
+            "APOE", "HSP90AA1")
+
+patchwork::wrap_plots(
+  lapply(markers, function(gene){
+    plot_cell_trajectory(putamen_subset_cds,
+                         markers = gene,
+                     use_color_gradient = T,
+                     cell_link_size = 0.2,
+                     markers_linear = T, cell_size = 0.1,
+                     show_branch_points = F) +
+        scale_color_gradient(low = "blue", high = "red") +
+      guides(color = guide_colorbar(title="Expression")) +
+      facet_grid(feature_id ~ stim) +
+      theme(legend.position = "bottom") +
+      NoAxes() + NoGrid()
+    })
+  )
+```
+
+
+```{r}
+branch = 1
+
+BEAM_res <- BEAM(putamen_subset_cds[putamen_ordering_genes,],
+                 branch_point = branch,
+                 cores = 1)
+BEAM_res <- BEAM_res[order(BEAM_res$qval),]
+```
+
+```{r}
+branch_sig_genes <- row.names(subset(BEAM_res, qval < 1e-4))[1:500]
+branch_sig_genes <- branch_sig_genes[branch_sig_genes %in% row.names(putamen_subset_cds)]
+
+branch_hmap <- plot_genes_branched_heatmap(putamen_subset_cds[branch_sig_genes,],
+                                   cores = 1,
+                                   # scale_max = 5,
+                                   # scale_min = -5,
+                                   branch_point = branch,
+                                   cluster_rows = T,
+                                   num_clusters = 3,
+                                   branch_states = c(3, 2),
+                                   branch_labels = c("branch-left",
+                                                     "branch-up"),
+                                   show_rownames = F,
+                                   return_heatmap = T)
+```
+```{r}
+grid::grid.newpage()
+grid::grid.draw(branch_hmap$ph_res)
+```
+
+
+```{r}
+library(gprofiler2)
+
+gene_clusters <- branch_hmap$annotation_row
+
+gene_list <- lapply(1:length(unique(gene_clusters$Cluster)), function(cluster){
+  row.names(gene_clusters)[gene_clusters$Cluster == cluster]
+})
+
+gostres <- gost(query = gene_list,
+                organism = "hsapiens", ordered_query = FALSE,
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE,
+                measure_underrepresentation = FALSE, evcodes = FALSE,
+                user_threshold = 0.05, correction_method = "g_SCS",
+                domain_scope = "annotated", custom_bg = NULL,
+                numeric_ns = "", sources = c("KEGG", "GO:MF", "GO:BP"),
+                as_short_link = FALSE)
+
+gostplot(gostres, capped = TRUE, interactive = TRUE)
+```
+
+```{r}
+write.csv(gene_clusters, "../data/monocle/branch_clusters/microglia_branch_clusters.csv")
+```
+

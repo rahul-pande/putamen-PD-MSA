@@ -1,0 +1,469 @@
+---
+title: "R Notebook - putamen subtype clustering"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "../")
+# knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.retina = T)
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+library(purrr)
+library(cowplot)
+library(tibble)
+library(ggplot2)
+library(scales)
+library(lattice)
+
+set.seed(12345)
+```
+
+
+```{r}
+data_celltypes <- readRDS("../data/overall_clustered_data/data_celltypes_annotated.rds")
+```
+
+
+Filter Astroglia from annotated cells
+```{r}
+data_astrocyte <- subset(data_celltypes, idents = "Astrocyte")
+
+print(as.data.frame(
+  table(data_astrocyte$stim, dnn=list("Group")),
+  responseName = c("Count")
+  )
+)
+```
+
+```{r}
+DimPlot(data_astrocyte, reduction = "tsne", group.by = "stim")
+DimPlot(data_astrocyte, label = T, reduction = "tsne", group.by = "seurat_clusters")
+```
+
+
+Split and Integrate CTRL, PD and MSA data
+
+```{r echo=FALSE, message=FALSE}
+
+putamen.list <- SplitObject(data_astrocyte, split.by = "orig.ident")
+
+normAndVarFeatures <- function(seuratObj){
+  DefaultAssay(seuratObj) <- "RNA"
+  seuratObj <- NormalizeData(seuratObj, verbose=FALSE)
+  seuratObj <- FindVariableFeatures(seuratObj, selection.method="vst", nfeatures = 1000, verbose=FALSE)
+  return(seuratObj)
+}
+
+putamen.list <- lapply(putamen.list, normAndVarFeatures)
+
+k.filter <- min(200, min(sapply(putamen.list, ncol)))
+
+combined.anchors <- FindIntegrationAnchors(
+  object.list = putamen.list,
+  anchor.features = 1000,
+  k.filter = k.filter
+)
+
+combined.integrated <- IntegrateData(anchorset = combined.anchors)
+```
+
+
+Dimensionality Reduction
+```{r}
+cat("combined data default assay: ", DefaultAssay(combined.integrated))
+combined.integrated <- ScaleData(combined.integrated, verbose=FALSE)
+combined.integrated <- RunPCA(combined.integrated, verbose=FALSE)
+
+combined.integrated
+```
+
+Determine number of PC to use for downstream analysis
+```{r}
+ElbowPlot(combined.integrated, ndims = 40)
+```
+
+
+```{r echo=FALSE}
+#Clustering and visualization(using tSNE and UMAP); resolution can vary
+combined <- FindNeighbors(combined.integrated, dims = 1:7)
+# vary clustering parameter
+combined <- RunUMAP(combined, dims = 1:7)
+combined <- RunTSNE(combined, dims = 1:7)
+```
+
+```{r echo=FALSE}
+# vary clustering parameter
+DefaultAssay(combined) <- "integrated"
+combined <- FindClusters(combined, resolution = 0.2)
+```
+
+```{r}
+DimPlot(combined, reduction = "umap", group.by = "orig.ident")
+DimPlot(combined, reduction = "umap", group.by = "stim")
+DimPlot(combined, reduction = "umap", group.by = "seurat_clusters")
+DimPlot(combined, reduction = "umap", split.by = "orig.ident", ncol = 3)
+DimPlot(combined, reduction = "umap", split.by = "stim", ncol = 3)
+```
+
+```{r}
+DimPlot(combined, reduction = "tsne", group.by = "orig.ident")
+DimPlot(combined, reduction = "tsne", group.by = "seurat_clusters")
+DimPlot(combined, reduction = "tsne", split.by = "orig.ident", ncol = 3)
+DimPlot(combined, reduction = "tsne", split.by = "stim", ncol = 3)
+```
+
+
+```{r}
+DefaultAssay(combined) <- "RNA"
+combined <- ScaleData(combined, verbose = FALSE)
+```
+
+```{r}
+table(combined$orig.ident, combined$seurat_clusters)
+```
+
+```{R}
+VlnPlot(combined,
+        features = c("nFeature_RNA", "percent.mt"),
+        assay = "RNA", pt.size = 0)
+```
+
+```{r warning=F, message=F}
+markers <- c(
+             "AQP4", "GJA1", "SLC1A3",
+             "SLC1A2", "GFAP",
+             "FGFR3", "CD44",
+             "BCAS1", "OPALIN", "MOG", "MBP", "ST18", # myelin
+             "KCNJ3",
+             "VEGFA", # Reactive
+             "MERTK", # Blood Brain Barrier
+             "GRID2", # ion transport
+             "SLC24A2" # ion transport
+             )
+
+VlnPlot(subset(combined, stim == "Control"),
+        features = markers, stack = T, assay = "RNA",
+        flip = T, fill.by = "ident") + NoLegend()
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+all.markers <- FindAllMarkers(subset(combined, stim == "Control"),
+                        logfc.threshold = 0.25, only.pos = F,
+                        test.use = "MAST", min.pct = 0.1,
+                        assay = "RNA", verbose = F)
+
+write.csv(all.markers, "../data/deg/astrocytes/control/astrocyte.cluster.markers.csv", row.names = F)
+```
+
+```{r}
+# all.markers.combined <- FindAllMarkers(combined,
+#                         logfc.threshold = 0.25, only.pos = T,
+#                         test.use = "MAST", min.pct = 0.1,
+#                         assay = "RNA", verbose = T)
+# 
+# write.csv(all.markers, "../data/deg/astrocytes/control/all.markers.conbined.csv", row.names = F)
+```
+
+```{r}
+new.cell.types <- c("AS1", "AS2", "AS3", "Exclude", "Exclude")
+
+Idents(combined) <- "seurat_clusters"
+names(new.cell.types) <- levels(combined)
+combined <- RenameIdents(combined, new.cell.types)
+combined$cell_type <- Idents(combined)
+```
+
+
+```{r}
+# saveRDS(combined, "../data/clustered_data/putamen_astrocytes.rds")
+combined <- readRDS("../data/clustered_data/putamen_astrocytes.rds")
+```
+
+
+Differential Gene Expression
+
+```{r}
+for(cluster in c("AS1", "AS2", "AS3") ){
+  inter <- subset(combined, idents = cluster)
+  Idents(inter) <- "stim"
+  
+  for(condition in c("MSA", "PD")){
+    de_genes <- FindMarkers(inter, ident.1 = condition, ident.2 = "Control",
+                            logfc.threshold = 0.25, assay = "RNA",
+                            only.pos = F, min.pct = 0.1, verbose = 5)
+    write.csv(de_genes, paste0("../data/deg/astrocytes/stim/cluster_",
+                                    cluster, "_",
+                                    condition, "_vs_Control", ".csv")
+              )
+  }
+}
+```
+
+Cluster Markers
+
+```{r}
+for(cluster in unique(Idents(subset(combined, stim == c("Control")))) ){
+  found.markers <- FindMarkers(subset(combined, stim == "Control"), ident.1 = cluster,
+                     assay = "RNA", only.pos = T, min.pct = 0.25, verbose = 5, test.use = "MAST")
+  write.csv(found.markers, paste0("./deg/astrocytes/control/cluster_control_", cluster, ".csv"))
+}
+```
+
+```{r}
+# Cluster 3 Signature
+
+# which(table(control_and_cluster_3$stim, control_and_cluster_3$seurat_clusters)["Control",] == 0) - 1
+
+absent_clusters <- c(3)
+
+for(cluster in absent_clusters){
+  
+  control_and_absent_cluster <- subset(combined, stim == c("Control") | seurat_clusters == cluster)
+  
+  found.markers <- FindMarkers(control_and_absent_cluster, ident.1 = cluster,
+                     assay = "RNA", only.pos = F, min.pct = 0.25, verbose = 5)
+  write.csv(found.markers, paste0("./deg/astrocytes/control/cluster_absent_", cluster, ".csv"))
+}
+
+```
+
+
+
+```{r}
+
+# Heterogeneity of Astrocytes
+# https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3734191/#pone.0069734-Benesova1 
+
+
+astro.markers <- c("GFAP", "GLUL", "STAT3")
+olig.precursor <- c("GFAP", "CSPG4", "PDGFRA")
+filament.stemcell.markers <- c("VIM", "NES", "SOX2")
+
+
+
+aquaporins.markers <- c("AQP1", "AQP4", "AQP9")
+hyp.activ.nucleotide <- c("HCN1", "HCN2", "HCN3", "HCN4")
+glutamate.receptors <- c("GRM1", "GRM3", "GRM5")
+ampa.receptors <- c("GRIA1", "GRIA2", "GRIA3", "GRIA4")
+misc.markers <- c("CLCN2", "TRPV4", "SNAP25")
+infl.cyto.chemo.kines <- c("CXCL10", "CCL5", "IL6")
+
+feature.groups.genes <- list(astro.markers = astro.markers,
+                             olig.precursor = olig.precursor,
+                             filament.stemcell.markers = filament.stemcell.markers,
+                             # aquaporins.markers = aquaporins.markers,
+                             glutamate.receptors = glutamate.receptors,
+                             ampa.receptors = ampa.receptors,
+                             # infl.cyto.chemo.kines = infl.cyto.chemo.kines,
+                             misc.markers = misc.markers
+                             )
+
+FacetedDotPlot(object = combined, features = feature.groups.genes,
+               assay = "RNA", cols = c("lightgrey", "blue"), group.by = "stim",
+               scale.max = 100, scale.min = 0, flip=TRUE, legend = T)
+
+```
+
+
+```{r fig.height=2.5, fig.width=8}
+FeaturePlot(combined, features = c("SNCA"), label = T,
+            split.by = "stim")
+```
+
+
+```{r echo=FALSE, message=FALSE}
+# Aging Mouse Brain
+# https://www.nature.com/articles/s41593-019-0491-3#Sec32
+markers <- c("GAPDH", "CLDN10", "GFAP", "S100B", "S100A6",
+             "THBS4", "ASCL1", "CD44", "FGFR3","MFGE8", "AGT", "IFIT1",
+             "GJA1", "AQP4")
+
+p1 <- StackedVlnPlot(subset(combined, stim == "Control"),
+                     features = markers,
+                     gtitle = "Aging Mouse Brain")
+
+# Neurotoxic Reactive Astrocytes A1/A2
+# # https://www.nature.com/articles/nature21029/figures/1
+markers <- c("GFAP",
+             "CD109", "CD14", "S100A10", "PTGS2", "EMP1", "CLCF1",
+             "GBP2", "FBLN5", "PSMB8","SRGN", "FKBP5", "AMIGO2", "APOE")
+
+p2 <- StackedVlnPlot(subset(combined, stim == "Control"),
+                     features = markers,
+                     gtitle = "Neurotoxic Reactive Astrocytes A1/A2")
+
+# Detecting Activated Cell Populations Using Single-Cell RNA-Seq AS1, AS2, AS3
+# # https://www.sciencedirect.com/science/article/pii/S0896627317308681
+markers <- c("GJA1", "LFNG", "AGT", "NKX6-2", "SFRP5", "LUZP2", "SLC7A10",
+             "MFGE8", "GRIA2", "GFAP", "MYOC", "CIDEA", "ID3", "LCAT", "ID1")
+
+p3 <- StackedVlnPlot(subset(combined, stim == "Control"), features = markers,
+                     gtitle = "Activated Astrocytes")
+
+p4 <- StackedVlnPlot(subset(combined, stim == "Control"),
+                     features = unique(reduce(feature.groups.genes, c)) ,
+                     gtitle = "Heterogeneity in astrocytes")
+
+# p1 | p2 | p3 | p4
+
+p2
+```
+
+
+```{r message=FALSE}
+
+plot.list <- list()
+
+for(group in sort(unique(combined$stim)) ){
+  p <- StackedVlnPlot(obj = subset(combined, stim == group),
+               assay = "RNA",
+               features = unique(reduce(feature.groups.genes, c)),
+               gtitle = group)
+  plot.list[[group]] <- p
+}
+
+patchwork::wrap_plots(plot.list, guides = "collect", ncol = 3)
+```
+
+```{r}
+DotPlot(subset(combined, stim == "Control"),
+        features = rev(unique(reduce(feature.groups.genes, c))) ) +
+  ggtitle("Control") +
+  coord_flip()
+```
+
+```{r}
+# Aging mouse bain
+
+markers <- c("GAPDH", "CLDN10", "GFAP", "S100B", "S100A6",
+             "THBS4", "ASCL1", "CD44", "FGFR3","MFGE8", "AGT", "IFIT1",
+             "GJA1", "AQP4", "APOE")
+
+DotPlot(subset(combined, stim == "Control"),
+        features = rev(markers)) +
+  ggtitle("Control") +
+  coord_flip()
+```
+
+```{r}
+DotPlot(object = combined,
+               assay = "RNA",
+               features = unique(reduce(feature.groups.genes, c)),
+               idents = c(cluster),
+               group.by = "stim",
+               scale.max = 100, scale.min = 0)
+```
+  
+```{r}
+
+plot.list <- list()
+for(cluster in 0:7 ){
+  p <- DotPlot(object = combined,
+               assay = "RNA",
+               # features = unique(reduce(feature.groups.genes, c)),
+               features = markers,
+               idents = c(cluster),
+               group.by = "stim",
+               scale.max = 100, scale.min = 0) + coord_flip() + NoLegend() +
+    theme(axis.text.x = element_text(angle = 90)) + ggtitle(cluster)
+  plot.list[[as.numeric(cluster) + 1]] <- p
+}
+
+patchwork::wrap_plots(plot.list, guides = "collect", ncol = 4)
+```
+
+```{r}
+
+get_conserved <- function(cluster.id){
+
+  FindConservedMarkers(combined,
+                       ident.1 = cluster.id,
+                       grouping.var = "stim",
+                       only.pos = TRUE) %>%
+    rownames_to_column(var = "gene") %>%
+    cbind(cluster_id = cluster.id, .)
+}
+
+conserved.markers <- map_dfr(0:(length(unique(Idents(combined))) -1), get_conserved)
+
+# saveRDS(conserved.markers, file = "./data/astrocytes.conserved.markers.RDS")
+
+# conserved.markers <- readRDS(file = "./data/astrocytes.conserved.markers.RDS")
+
+```
+
+
+```{r}
+top10 <- conserved.markers %>%
+  mutate(avg_fc = (Control_avg_logFC + PD_avg_logFC + MSA_avg_logFC) /3) %>%
+  filter(cluster_id %in% 0:6) %>%
+  group_by(cluster_id) %>%
+  top_n(n = 5, wt = avg_fc) %>%
+  arrange(cluster_id, desc(avg_fc))
+
+top10 <- left_join(top10,
+                   getGeneDescription(unique(top10$gene)),
+                   by = c("gene" = "external_gene_name")
+                   )
+
+```
+
+```{r}
+top.marker.genes <- unique(top10$gene)
+
+# DoHeatmap(combined, features = marker.genes, group.by = c("stim", "ident")) + NoLegend()
+DoHeatmap(subset(combined, stim == "Control"), features = top.marker.genes, group.by = "ident") + NoLegend()
+```
+
+```{r}
+new.cluster.ids <- c()
+names(new.cluster.ids) <- levels(combined)
+combined <- RenameIdents(combined, new.cluster.ids)
+```
+
+```{r}
+cell.idents <- data.frame(cluster_id = combined$seurat_clusters,
+                          sample_id = combined$orig.ident,
+                          group_id = combined$stim,
+                          cluster_type = Idents(combined)
+                          )
+
+cell.agg <- cell.idents %>%
+  group_by(group_id, sample_id) %>%
+  mutate(sample_size = length(sample_id)) %>%
+  group_by(group_id, sample_id, cluster_type) %>%
+  mutate(cluster_size = length(cluster_type)) %>%
+  mutate(cluster_proportion = cluster_size/sample_size) %>%
+  distinct()
+
+bwplot(cluster_proportion ~ group_id|cluster_type, cell.agg,
+       layout=c(5,2), scale = list(x=list(rot=60)))
+
+bwplot(cluster_proportion ~ cluster_type|group_id, cell.agg,
+       layout=c(3,1), scale = list(x=list(rot=60)))
+
+
+dotplot(cluster_proportion ~ group_id|cluster_type, cell.agg,
+       layout=c(5,2), scale = list(x=list(rot=60)))
+
+bwplot(paste(cluster_type, group_id, sep = "  ---   ") ~ cluster_proportion, cell.agg)
+
+```
+
+
+
+
+

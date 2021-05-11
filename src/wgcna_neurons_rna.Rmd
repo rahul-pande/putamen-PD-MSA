@@ -1,0 +1,551 @@
+---
+title: "Neurons WGCNA"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "../")
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(WGCNA)
+library(gprofiler2)
+library(caret)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+
+set.seed(12345)
+```
+
+
+```{r}
+# data_celltypes <- readRDS("./data/clusters_labelled_PD_MSA_CTR_res0_8_feat2000.rds")
+# sample_attributes <- read.csv("./data/putamen_sample_attributes.txt",
+#                               sep = "\t", stringsAsFactors = F)
+```
+
+
+```{r}
+# meta_data <- data_celltypes@meta.data
+# sortday_meta_data <- meta_data %>%
+#   tibble::rownames_to_column("rownames") %>%
+#   left_join(sample_attributes, by = c("orig.ident" = "Sample.name")) %>%
+#   tibble::column_to_rownames("rownames") %>%
+#   select(sort_day)
+# 
+# data_celltypes <- AddMetaData(data_celltypes, sortday_meta_data)
+```
+
+```{r warning=FALSE}
+# data_celltypes_corrected <- SCTransform(data_celltypes,
+#                                         vars.to.regress = c("sort_day"),
+#                                         return.only.var.genes = FALSE, verbose = TRUE)
+# 
+# 
+# saveRDS(data_celltypes_corrected, "./data/data_celltypes_corrected_sort_day.rds")
+# 
+# data_neurons <- subset(
+#     data_celltypes_corrected
+#   , idents = c("Neuron")
+# )
+#  
+# saveRDS(data_neurons, "./data/data_neurons_corrected_sort_day.rds")
+
+# data_neurons_corrected <- readRDS("./data/data_neurons_corrected_sort_day.rds")
+# sample_attributes <- read.csv("./data/putamen_sample_attributes.txt", sep = "\t", stringsAsFactors = F)
+
+# data_neurons_corrected <- readRDS("./data/data_neurons_deep_corrected_sort_day.rds")
+data_neurons <- readRDS("../data/clustered_data/data_neurons_deep_corrected_sort_day.rds")
+data_neurons <- subset(data_neurons, cell_type != "Exclude")
+```
+
+```{r}
+# DefaultAssay(data_neurons)
+
+VlnPlot(data_neurons,
+        features = c("nFeature_SCT", "nCount_SCT"), pt.size = 0.01, group.by = "orig.ident")
+```
+
+
+```{r}
+cell_group <- data_neurons$stim
+
+data_expr <- data_neurons[["SCT"]]@data
+
+gene_list <- read.csv("../data/auxiliary_data/pc_genes_ensemble_biomart02082021.txt",
+                      sep = "\t")
+data_expr <- data_expr[row.names(data_expr) %in% gene_list$external_gene_name, ]
+```
+
+
+```{r}
+
+# Subset CTR and MSA
+# data_expr <- data_expr[, cell_group %in% c("Control", "MSA")]
+
+data_expr <- as.matrix(data_expr)
+data_expr <- t(data_expr)
+
+# rm(data_celltypes)
+
+gsg = goodSamplesGenes(data_expr, verbose = 3)
+gsg$allOK
+
+data_expr <- data_expr[, gsg$goodGenes]
+
+consideredGenes <- colnames(data_expr)
+
+
+dim(data_expr)
+gc()
+collectGarbage()
+```
+
+```{r}
+collectGarbage()
+
+allowWGCNAThreads()
+
+powers = c(c(1:10), seq(from = 12, to=16, by=2))
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+    data_expr
+  , powerVector = powers
+  , verbose = 6
+  , networkType = "unsigned"
+  # , blockSize = 1500
+)
+```
+
+
+
+```{r}
+# Plot the results:
+# Scale-free topology fit index as a function of the soft-thresholding power
+{
+  plot(
+    sft$fitIndices$Power
+    , -sign(sft$fitIndices$slope)*sft$fitIndices$SFT.R.sq
+    , xlab="Soft Threshold (power)"
+    , ylab="Scale Free Topology Model Fit,signed R^2"
+    , type="n"
+    , main = paste("Scale independence")
+  )
+  text(
+    sft$fitIndices$Power
+    , -sign(sft$fitIndices$slope)*sft$fitIndices$SFT.R.sq
+    , labels=powers
+    , cex=0.9
+    , col="red"
+  )
+  # this line corresponds to using an R^2 cut-off of h
+  abline(h=0.90,col="red")
+}
+```
+```{r}
+# Mean connectivity as a function of the soft-thresholding power
+{
+  sftPower <- tail(sft$fitIndices$Power, -1)
+  sftMeanK <- tail(sft$fitIndices$mean.k., -1)
+  plot(
+    sftPower
+    , sftMeanK
+    , xlab="Soft Threshold (power)"
+    , ylab="Mean Connectivity"
+    , type="n"
+    , main = paste("Mean connectivity")
+  )
+  text(
+    sftPower
+    , sftMeanK
+    , labels=sftPower
+    , cex=0.9
+    , col="red"
+  )
+}
+```
+
+```{r}
+adj <- adjacency(data_expr, power = 6, type = "unsigned")
+TOM <- TOMsimilarity(adj);
+
+row.names(TOM) = colnames(TOM) = consideredGenes
+
+dissTOM <- 1-TOM
+```
+
+```{r}
+collectGarbage()
+geneTree = flashClust(as.dist(dissTOM), method = "average");
+
+plot(
+   geneTree
+  , xlab=""
+  , sub=""
+  , main = "Gene clustering on TOM-based dissimilarity"
+  , labels = FALSE
+  , hang = 0.04
+);
+
+```
+
+```{r}
+dynamicMods = cutreeDynamic(
+    dendro = geneTree
+  , distM = dissTOM
+  , deepSplit = 3
+  , method = "hybrid"
+  , pamStage = TRUE
+  , pamRespectsDendro = FALSE
+);
+table(dynamicMods)
+```
+
+```{r}
+dynamicColors = labels2colors(dynamicMods)
+table(dynamicColors)
+```
+
+
+```{r}
+plotDendroAndColors(
+    geneTree
+  , dynamicColors
+  , "Dynamic Tree Cut"
+  , dendroLabels = FALSE
+  , hang = 0.03
+  , addGuide = TRUE
+  , guideHang = 0.05
+  , main = "Gene dendrogram and module colors"
+)
+```
+
+```{r}
+filteredGenesFlag <- dynamicColors != "grey"
+filteredTOM <- TOMsimilarityFromExpr(data_expr[, filteredGenesFlag], power = 6)
+row.names(filteredTOM) = colnames(filteredTOM) = consideredGenes[filteredGenesFlag]
+filteredDissTOM <- 1 - filteredTOM
+```
+
+```{r}
+collectGarbage()
+filtGeneTree <- flashClust(as.dist(filteredDissTOM), method = "average");
+
+plotDendroAndColors(
+    filtGeneTree
+  , dynamicColors[filteredGenesFlag]
+  , "Dynamic Tree Cut"
+  , dendroLabels = FALSE
+  , hang = 0.03
+  , addGuide = TRUE
+  , guideHang = 0.05
+  , main = "Neurons Module Dendrogram and Module Colors"
+  , cex.dendroLabels = 0.003
+  # , cex.colorLabels = 0.3
+)
+```
+
+```{r}
+diag(filteredDissTOM) = NA;
+sizeGrWindow(7,7)
+TOMplot(
+    filteredDissTOM ^ 8
+  , filtGeneTree
+  , as.character(dynamicColors[filteredGenesFlag])
+)
+```
+
+
+```{r}
+module_colors= setdiff(unique(dynamicColors), "grey")
+all_modules <- list()
+for (color in module_colors){
+    module=consideredGenes[which(dynamicColors==color)]
+    write.table(
+        module
+      , file = paste(c("../data/wgcna/modules/rna/neurons_module_", color, ".txt"), collapse = "")
+      , quote = F
+      , row.names = F
+      , col.names = F
+    )
+    all_modules[[color]] <- module
+}
+```
+
+
+```{r}
+MEList <- moduleEigengenes(
+    data_expr[,dynamicColors != "grey"]
+  , colors = dynamicColors[dynamicColors != "grey"]
+)
+
+MEs <- MEList$eigengenes
+plotEigengeneNetworks(MEs, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2))
+
+individualGeneKME <- signedKME(
+    data_expr[,dynamicColors != "grey"]
+  , MEs
+  , outputColumnName = "kME"
+)
+```
+
+
+```{r}
+stim_df <- data.frame(stim = as.factor(cell_group))
+dmy <- dummyVars(" ~ . ", data = stim_df)
+traits_df <-data.frame(predict(dmy, newdata = stim_df))
+
+nGenes = ncol(data_expr);
+nSamples = nrow(data_expr);
+
+MEs = orderMEs(MEs)
+
+moduleTraitCor = cor(MEs, traits_df, use = "p")
+moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nSamples)
+```
+
+```{r}
+textMatrix = paste(signif(moduleTraitCor, 2), " (", signif(moduleTraitPvalue, 1), ")", sep = "");
+dim(textMatrix) = dim(moduleTraitCor)
+
+{par(mar = c(4.5, 15, 2, 2));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(Matrix = moduleTraitCor,
+               xLabels = sapply(strsplit(names(traits_df), ".", fixed = T), function(x){return(x[2])}),
+               yLabelsPosition = "left", cex.lab.x = 1.4, cex.lab.y = 1.4,
+               yLabels = names(MEs),
+               ySymbols = names(MEs),
+               colorLabels = T, xLabelsAngle = 0,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrix,
+               setStdMargins = F,
+               cex.text = 1.4,
+               zlim = c(-1,1),
+               main = paste(""))
+}
+
+```
+
+
+```{r}
+# colors <- c("blue", "red", "brown")
+
+colors <- unique(dynamicColors[dynamicColors != "grey"])
+
+module_genes <- lapply(colors, function(x){
+  return(consideredGenes[which(dynamicColors==x)])
+  })
+names(module_genes) <- colors
+
+gostres <- gost(query = module_genes, 
+                organism = "hsapiens", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "g_SCS", 
+                domain_scope = "annotated", custom_bg = NULL, 
+                numeric_ns = "", sources = c("KEGG", "GO:BP", "GO:MF"),
+                as_short_link = FALSE)
+
+gostplot(gostres, capped = TRUE, interactive = TRUE)
+```
+
+```{r}
+module_gene_df <- data.frame(unlist(module_genes), stringsAsFactors = F)
+colnames(module_gene_df) <- "gene"
+module_gene_df$module <- stringr::str_extract(row.names(module_gene_df), "[a-zA-Z&]+")
+row.names(module_gene_df) <- module_gene_df$gene
+
+write.csv(module_gene_df, "../data/wgcna/modules/rna/neurons_module_genes.csv", row.names = F)
+```
+
+
+################################################################################################
+################################################################################################
+#####################################  END OF MAIN CODE ########################################
+################################################################################################
+################################################################################################
+
+
+```{r}
+module_gene_df <- subset(module_gene_df, module == c("blue"))
+heatmap_genes <- subset(module_gene_df,
+                        gene %in% row.names(data_neurons@assays$SCT@scale.data)
+                        )
+
+hmap_matrix <- as.matrix(
+  data_neurons@assays$SCT@data[
+    heatmap_genes$gene [ which(heatmap_genes$gene %in% row.names(data_neurons@assays$SCT@scale.data)
+                                  ) ],
+    ]
+)
+
+# color_map = list(
+#     module = c(brown = "#A52A2A", green = "#00FF00", pink = "#FFC0CB"),
+#     stim = c(HC = "#177BC4", M = "#FF6600", S = "#FF0000"),
+#     cell_type = c("Macrophage" = "#A3A500",
+#                   "NK&T" = "#00B0F6",
+#                   "B" = "#E76BF3",
+#                   "Epithelial" = "#F8766D",
+#                   "Neutrophil" = "#00BF7D")
+# )
+
+col_anno <- subset(data_neurons@meta.data, select = c("stim", "cell_type"))
+col_anno <- col_anno %>% arrange(stim, cell_type)
+row_anno <- subset(heatmap_genes, select = c("module"))
+  
+pheatmap::pheatmap(
+                   hmap_matrix[,row.names(col_anno)],
+                   # rescale(hmap_matrix[,row.names(col_anno)], to = c(-1,1)),
+                   annotation_col = col_anno,
+                   annotation_row = row_anno,
+                   # annotation_colors = color_map,
+                   cluster_rows = F,
+                   # color = colorRampPalette(c("blue", "red"))(30),
+                   color = colorRampPalette(c("purple", "black", "yellow"))(30),
+                   
+                   # color = colorRampPalette(RColorBrewer::brewer.pal(name = "Reds", n = 9))(30),
+                   # color = viridis(12),
+                   cluster_cols = F,
+                   show_colnames = F, legend = T,
+                   # cellheight = 1,
+                   # cellwidth = 1,
+                   width = 6,
+                   height = 5,
+                   # scale = c("row", "column"),
+                   show_rownames = F,
+                   filename = "plot.png")
+```
+
+
+```{r}
+DoHeatmap(data_neurons, features = c(module_genes$blue),
+          cells = sample(colnames(data_neurons)),
+          group.by = "stim", raster = T, assay = "SCT",
+          draw.lines = T, angle = 0, hjust = 0.5)
+```
+
+
+```{r message=F}
+brown_KME <- subset(
+  individualGeneKME[module_genes$brown,],
+  select = c("kMEbrown"))
+brown_KME$genes <- row.names(brown_KME)
+brown_hmap_genes <- brown_KME$genes[order(abs(brown_KME$kMEbrown), decreasing = T)[1:20]]
+
+yellow_KME <- subset(
+  individualGeneKME[module_genes$yellow,],
+  select = c("kMEyellow"))
+yellow_KME$genes <- row.names(yellow_KME)
+yellow_hmap_genes <- yellow_KME$genes[order(abs(yellow_KME$kMEyellow), decreasing = T)[1:40]]
+
+
+new_metadata <- subset(combined@meta.data, select = c("cell_type"))
+data_neurons <- AddMetaData(data_neurons, new_metadata)
+data_neurons$stim_cell_type <- paste(data_neurons$stim,
+                                               data_neurons$cell_type, sep = "-")
+
+DoHeatmap(object = data_neurons, features = brown_hmap_genes,
+          group.by = c("stim"),
+          assay = "SCT", slot = "data") +
+  scale_fill_gradientn(colors = c("lightgrey", "darkblue"))
+```
+
+
+```{r}
+modNames = substring(names(MEs), 3)
+
+geneModuleMembership = as.data.frame(cor(data_expr, MEs, use = "p"));
+MMPvalue = as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples));
+
+names(geneModuleMembership) = paste("MM", modNames, sep="");
+names(MMPvalue) = paste("p.MM", modNames, sep="");
+
+geneTraitSignificance = as.data.frame(cor(data_expr, traits_df, use = "p"));
+GSPvalue = as.data.frame(corPvalueStudent(as.matrix(geneTraitSignificance), nSamples));
+
+names(geneTraitSignificance) = paste("GS.", names(traits_df), sep="");
+names(GSPvalue) = paste("p.GS.", names(traits_df), sep="");
+```
+
+```{r}
+cat("SNCA module color: ", dynamicColors[which(consideredGenes == "SNCA")])
+```
+
+```{r}
+kME_sort_oder <- order(abs(individualGeneKME["SNCA",]), decreasing = T)
+head(t(individualGeneKME["SNCA",][kME_sort_oder]))
+```
+
+```{r fig.show="hold"}
+# colors <- c("magenta", "yellow", "brown", "blue")
+
+cell_ident <- data_neurons$orig.ident
+
+for(which.module in colors){
+  sort_order <- order(cell_ident)
+  
+  ME=MEs[, paste("ME",which.module, sep="")][sort_order]
+  par(mfrow=c(2,1), mar=c(0.3, 5.5, 5.5, 2))
+  
+  expr_mat <- t(
+    scale(
+      data_expr[sort_order,dynamicColors==which.module ]
+    )
+  )
+  
+  cluster.ids <- data_neurons$seurat_clusters
+  
+  plotMat(
+      expr_mat
+    , nrgcols=50
+    , rlabels=consideredGenes[dynamicColors == which.module]
+    , clabels = paste(cell_ident[sort_order], cluster.ids, sep = "_")
+    , rcols=which.module
+    , main=which.module
+    , cex.main=2
+  )
+  
+  par(mar=c(5, 4.2, 0, 0.7))
+  barplot(
+      ME
+    , col=which.module
+    , main=""
+    , cex.main=2
+    , ylab="eigengene expression"
+    , xlab="array sample"
+  )
+}
+
+```
+
+
+```{r}
+print(names(module_genes))
+DefaultAssay(data_neurons) <- "SCT"
+lapply(module_genes)
+       
+
+```
+
+```{r}
+ordered_module_genes <- mapply(function(genes, module){
+  return_subset <- individualGeneKME[genes, paste0("kME", module, collapse = "")]
+  
+  return_sort_oder <- order(abs(return_subset), decreasing = T)
+  
+  names(return_subset) <- genes
+  return(return_subset[return_sort_oder])
+}, module_genes, names(module_genes))
+
+```
+

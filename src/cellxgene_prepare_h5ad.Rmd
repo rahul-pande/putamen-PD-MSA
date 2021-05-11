@@ -1,0 +1,65 @@
+---
+title: "cellxgene preparation"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "../")
+```
+
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Minicond..
+bash
+pip install cellxgene
+cellxgene launch /home/E0462428/GROUP-TS/Genomics/rahul/putamen/putamen_30k.h5ad
+
+viewer <- getOption("viewer")
+viewer("http://localhost:5005")
+
+```{r message=FALSE, echo=FALSE}
+install.packages("reticulate", Ncpus = 8)
+
+library(reticulate)
+library(Seurat)
+library(Matrix)
+
+install_miniconda()
+conda_install("r-reticulate", packages = "anndata", channel = "bioconda")
+
+anndata <- import("anndata", convert = FALSE)
+```
+
+```{r echo=FALSE}
+seurat_object <- readRDS("../data/overall_clustered_data/data_subtypes_cellxgene.rds")
+```
+
+```{r}
+DefaultAssay(seurat_object) <- "RNA"
+
+diet_seurat_object <- UpdateSeuratObject(
+  DietSeurat(seurat_object, assays = "RNA",
+             dimreducs = c("umap", "tsne"))
+)
+
+adata <- anndata$AnnData(
+  X = t(GetAssayData(object = diet_seurat_object)),
+  obs = data.frame(diet_seurat_object@meta.data), 
+  obsm  = list(
+    "X_tsne" = Embeddings(diet_seurat_object[["tsne"]]),
+    "X_umap" = Embeddings(diet_seurat_object[["umap"]])
+  )
+)
+
+adata$var_names <- row.names(diet_seurat_object)
+
+anndata$AnnData$write(adata, '../data/overall_clustered_data/putamen_subtypes_cellxgene.h5ad')
+```
+
+
+
+
+library(Seurat)
+library(SeuratDisk)
+
+SaveH5Seurat(diet_seurat_object, filename = "putamen_subtypes_cellxgene.h5Seurat")
+Convert("putamen_subtypes_cellxgene.h5Seurat", dest = "h5ad")
+

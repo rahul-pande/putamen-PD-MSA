@@ -1,0 +1,214 @@
+---
+title: "R Notebook - putamen subtype clustering"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "../")
+# knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.retina = T)
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+library(purrr)
+library(cowplot)
+library(tibble)
+library(ggplot2)
+library(scales)
+library(lattice)
+
+set.seed(12345)
+```
+
+
+```{r}
+putamen_astrocytes <- readRDS("../data/clustered_data/putamen_astrocytes.rds")
+Idents(putamen_astrocytes) <- "cell_type"
+putamen_astrocytes <- subset(putamen_astrocytes, cell_type != "Exclude")
+```
+
+```{r}
+DefaultAssay(putamen_astrocytes) <- "RNA"
+putamen_astrocytes <- ScaleData(putamen_astrocytes)
+```
+
+```{r}
+DimPlot(putamen_astrocytes, group.by = "cell_type",
+        # cols = DiscretePalette(3, "polychrome"),
+        cols = RColorBrewer::brewer.pal(7, "Set1")[2:4],
+        split.by = "stim", ncol = 1,
+        pt.size = 0.2, label = F, repel = T,
+        label.size = 4, reduction = "tsne") +
+  facet_wrap(~stim, strip.position = "left", ncol = 1) +
+  # guides(color=guide_legend(ncol=1, override.aes = list(size=4))) +
+  theme( axis.line=element_blank(),
+         strip.text = element_text(size = rel(1.2)),
+         axis.text.x=element_blank(),
+         axis.text.y=element_blank(),
+         axis.ticks=element_blank(),
+         axis.title.x=element_blank(),
+         axis.title.y=element_blank(),
+         legend.text=element_text(size=rel(1.1)),
+         legend.position = "left",
+         plot.title = element_blank(),
+         panel.background=element_blank(),
+         panel.border=element_blank(),
+         panel.grid.major=element_blank(),
+         panel.grid.minor=element_blank(),
+         plot.background=element_blank())
+
+```
+
+```{r warning=F, message=F}
+markers <- c(
+             "AQP4", "GJA1", "SLC1A3",
+             "SLC1A2", "GFAP",
+             "FGFR3", "CD44",
+             # "BCAS1", "OPALIN", "MOG",
+             "MBP", "ST18", # myelin
+             "KCNJ3",
+             "VEGFA", # Reactive
+             "MERTK", "MEGF10", # Blood Brain Barrier
+             "GRID2" # ion transport
+             )
+
+VlnPlot(subset(putamen_astrocytes, stim == "Control"),
+        features = markers, stack = T, assay = "RNA",
+        # cols = DiscretePalette(3, "alphabet"),
+        cols = RColorBrewer::brewer.pal(7, "Set1")[2:4],
+        flip = T, fill.by = "ident") +
+  NoLegend() +
+  theme(axis.title.x = element_blank())
+```
+
+Astrocytes proportion
+```{r}
+cell.idents <- data.frame(cluster_id = putamen_astrocytes$seurat_clusters,
+                          sample_id = putamen_astrocytes$orig.ident,
+                          group_id = putamen_astrocytes$stim,
+                          cluster_type = putamen_astrocytes$cell_type
+                          )
+
+cell.agg <- cell.idents %>%
+  group_by(group_id) %>%
+  mutate(sample_size = length(group_id)) %>%
+  group_by(group_id, cluster_type) %>%
+  mutate(proportion = length(cluster_type)/sample_size) %>%
+  dplyr::select(group_id, cluster_type, proportion) %>%
+  distinct()
+
+colors <- c(sapply(c("Greens", "Blues", "Reds"),
+                   function(pal){
+                     RColorBrewer::brewer.pal(n = 6, name = pal)[3:5]
+                     }
+                   )
+            )
+colors <- colors[c(2,5,8)]
+
+ggplot(cell.agg, aes(x = cluster_type, y = proportion, fill = group_id)) +
+  geom_bar(width = 0.5, stat = "identity", position = position_fill()) +
+  scale_fill_manual(values = colors) +
+  labs(y = "scaled proportion") +
+  scale_y_continuous(breaks = c(0, 0.33, 0.66, 1)) +
+  geom_hline(yintercept = 0.33, linetype='dotted', color = "grey30") +
+  geom_hline(yintercept = 0.66, linetype='dotted', color = "grey30") +
+  theme_cowplot() +
+  theme(axis.text.x = element_text(angle = 50, vjust = 0.5, size = rel(1.5)),
+        # axis.text.y = element_blank(),
+        # axis.ticks.y = element_blank(),
+        axis.title.y = element_text(size = rel(1.5)),
+        # axis.line.y = element_blank(),
+        axis.title.x = element_blank())
+
+```
+
+```{r}
+cell.idents <- data.frame(cluster_id = putamen_astrocytes$seurat_clusters,
+                          sample_id = putamen_astrocytes$orig.ident,
+                          group_id = putamen_astrocytes$stim,
+                          cluster_type = putamen_astrocytes$cell_type
+                          )
+
+cell.agg <- cell.idents %>%
+  group_by(group_id, sample_id) %>%
+  mutate(sample_size = length(sample_id)) %>%
+  group_by(group_id, sample_id, cluster_type) %>%
+  mutate(cluster_size = length(cluster_type)) %>%
+  mutate(cluster_proportion = cluster_size/sample_size) %>%
+  distinct()
+
+bwplot(cluster_proportion ~ group_id|cluster_type, cell.agg,
+       layout=c(3,1), scale = list(x=list(rot=60)))
+
+bwplot(cluster_proportion ~ cluster_type|group_id, cell.agg,
+       layout=c(3,1), scale = list(x=list(rot=60)))
+
+
+dotplot(cluster_proportion ~ group_id|cluster_type, cell.agg,
+       layout=c(3,1), scale = list(x=list(rot=60)))
+
+bwplot(paste(cluster_type, group_id, sep = "  ---   ") ~ cluster_proportion, cell.agg)
+```
+
+
+```{r}
+plot.genes <- c("SLC1A2", "SLC1A3", "GLUL",
+                # "MERTK", "MEGF10",
+                "GFAP", "CD44", "FOS", "APOE")
+
+interim.plot <- DotPlot(putamen_astrocytes,
+                        features = rev(plot.genes),
+                        group.by = "cell_type", split.by = "stim",
+                        assay = "RNA", scale = F,
+                        cols = rep("blue", 3)
+                        )
+data.plot <- as.data.frame(interim.plot["data"])
+
+data.plot <- data.plot %>%
+  separate(data.id, c("data.celltype","data.stim"), sep = "_")
+
+ggplot(data.plot, mapping = aes(x = data.stim, y = data.features.plot)) +
+  geom_point(mapping = aes(size = data.pct.exp,
+                           color = rescale(data.avg.exp.scaled, to = c(-1,1))
+                           # color = data.avg.exp.scaled
+                           )) +
+  facet_grid(~ data.celltype) +
+  scale_radius(range = c(0, 7), limits = c(0, 100)) +
+  scale_color_gradient(low = "grey", high = "blue") +
+  scale_x_discrete(position = "bottom") +
+  
+  guides(size = guide_legend(title = "Percent Expressed")) +
+  guides(color = guide_colorbar(title = "Scaled Average Expression")) +
+  
+  theme_cowplot() +
+  # ggtitle("", subtitle = paste("Expression", sep = " ")
+  #         ) +
+  
+  theme(axis.text.x = element_text(face = "bold", angle = 90, hjust = 0.5),
+        axis.text.y = element_text(size = rel(1.2), face = "bold", angle = 0),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(), legend.position = "bottom", legend.box = "vertical",
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold"),
+        plot.background = element_blank(),
+        axis.title.x = element_blank(),
+        plot.title = element_blank(),
+        plot.subtitle = element_text(size = rel(1.5), face = "bold"))
+```
+

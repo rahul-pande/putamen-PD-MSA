@@ -1,0 +1,52 @@
+.modify_vlnplot<- function(obj, 
+                          feature, 
+                          pt.size = 0, 
+                          plot.margin = unit(c(-0.75, 0, -0.75, 0), "cm"),
+                          ...) {
+  p<- VlnPlot(obj, features = feature, pt.size = pt.size, ... )  + 
+    xlab(element_blank()) + ylab(feature) +
+    theme(axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(), 
+          axis.title.y = element_text(size = rel(1.5), angle = 0), 
+          axis.text.y = element_text(size = rel(0.8)), 
+          plot.title = element_blank(),
+          plot.margin = margin(t=0, b=0) ) + NoLegend()
+  return(p)
+}
+
+## extract the max value of the y axis
+.extract_max<- function(p){
+  ymax<- max(ggplot_build(p)$layout$panel_scales_y[[1]]$range$range)
+  return(ceiling(ymax))
+}
+
+
+## main function
+StackedVlnPlot<- function(obj, features,
+                          pt.size = 0,
+                          gtitle = NULL,
+                          ...) {
+  
+  options(warn=-1)
+  
+  plot_list<- purrr::map(features, function(x) .modify_vlnplot(obj = obj,feature = x, ...))
+  
+  # Add back x-axis title to bottom plot. patchwork is going to support this?
+  plot_list[[length(plot_list)]]<- plot_list[[length(plot_list)]] +
+    theme(axis.text.x=element_text(angle = 45, size = rel(1.2)), axis.ticks.x = element_blank())
+  
+  if(!is.null(gtitle)){
+    plot_list[[1]]<- plot_list[[1]] + ggtitle(gtitle)
+  }
+
+  # change the y-axis tick to only max value
+  ymaxs<- purrr::map_dbl(plot_list, .extract_max)
+  plot_list<- purrr::map2(plot_list, ymaxs, function(x,y) x +
+                            scale_y_continuous(breaks = c(y)) +
+                            expand_limits(y = y)
+                          )
+  
+  p<- patchwork::wrap_plots(plotlist = plot_list, ncol = 1, )
+  options(warn=0)
+  return(p)
+}

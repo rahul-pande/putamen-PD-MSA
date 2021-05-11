@@ -1,0 +1,190 @@
+---
+title: "R Notebook - putamen subtype clustering"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "../")
+# knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.retina = T)
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+library(purrr)
+library(cowplot)
+library(tibble)
+library(ggplot2)
+library(scales)
+library(lattice)
+
+set.seed(12345)
+```
+
+
+```{r}
+combined <- readRDS("../data/overall_clustered_data/clusters_labelled_020921_PD_MSA_CTR_res0_8_feat2000.rds")
+```
+
+Dimensionality Reduction
+```{r}
+DefaultAssay(combined) <- "integrated"
+cat("combined data default assay: ", DefaultAssay(combined))
+combined <- ScaleData(combined, verbose=TRUE)
+combined <- RunPCA(combined, verbose=TRUE)
+
+combined
+```
+
+Determine number of PC to use for downstream analysis
+```{r}
+ElbowPlot(combined, ndims = 40)
+```
+
+
+```{r echo=FALSE}
+#Clustering and visualization(using tSNE and UMAP); resolution can vary
+combined <- FindNeighbors(combined, dims = 1:7)
+# vary clustering parameter
+combined <- RunUMAP(combined, dims = 1:7)
+combined <- RunTSNE(combined, dims = 1:20)
+```
+
+```{r echo=FALSE}
+# vary clustering parameter
+DefaultAssay(combined) <- "integrated"
+combined <- FindClusters(combined, resolution = 0.2)
+```
+
+```{r}
+DimPlot(combined, reduction = "umap", group.by = "orig.ident")
+DimPlot(combined, reduction = "umap", group.by = "stim")
+DimPlot(combined, reduction = "umap", label = T, group.by = "seurat_clusters")
+DimPlot(combined, reduction = "umap", split.by = "orig.ident", ncol = 3)
+DimPlot(combined, reduction = "umap", split.by = "stim", ncol = 3)
+```
+
+```{r}
+DimPlot(combined, reduction = "tsne", group.by = "orig.ident")
+DimPlot(combined, reduction = "tsne", label = T, group.by = "seurat_clusters")
+DimPlot(combined, reduction = "tsne", split.by = "orig.ident", ncol = 3)
+DimPlot(combined, reduction = "tsne", split.by = "stim", ncol = 3)
+```
+
+```{r}
+DefaultAssay(combined) <- "RNA"
+combined <- ScaleData(combined, verbose = FALSE)
+```
+
+
+```{r}
+markers.deg <- FindAllMarkers(combined, assay = "RNA", test.use = "MAST",
+                              only.pos = T, verbose = T)
+write.csv(markers.deg, "../data/deg/overall/cluster.markers.deg.csv")
+```
+
+
+```{r}
+table(combined$stim, combined$seurat_clusters)
+```
+
+
+```{R}
+VlnPlot(combined,
+        features = c("nFeature_RNA", "percent.mt"),
+        assay = "RNA", pt.size = 0)
+```
+```{r warning=F, message=F}
+  
+major.markers <- c("BCAS1", "OPALIN", "HAPLN2",
+                   "RBFOX3",
+                   # "MEG3",
+                   "GFAP", "AQP4",
+                   # "GFAP",
+                   # "TYROBP", "CTSS", "C1QA", "CD74",
+                   "PDGFRA", "VCAN",
+                   "CSF1R", "CD74",
+                   # "CSPG4",
+                   # "FLT1", "NOSTRIN", "SRGN",
+                   "COLEC12", "DCN", "PDGFRB"
+                   )
+
+VlnPlot(subset(combined, stim == "Control"),
+        features = major.markers,
+        group.by = "seurat_clusters",
+        stack = T, assay = "RNA",
+        flip = T) +
+  theme(axis.title.x = element_blank()) + NoLegend()
+```
+
+```{r}
+new.cell.types <- c("Oligodendrocyte",
+                    "Neuron",
+                    "Astrocyte",
+                    "Oligodendrocyte",
+                    "Microglia",
+                    "OPC",
+                    "Exclude",
+                    "Neuron",
+                    "VLMC",
+                    "Exclude",
+                    "Exclude",
+                    "Exclude")
+
+Idents(combined) <- "seurat_clusters"
+names(new.cell.types) <- levels(combined)
+combined <- RenameIdents(combined, new.cell.types)
+combined$cell_type <- Idents(combined)
+```
+
+
+```{r}
+# saveRDS(combined, "../data/overall_clustered_data/data_celltypes_annotated.rds")
+combined <- readRDS("../data/overall_clustered_data/data_celltypes_annotated.rds")
+```
+
+
+```{r}
+combined <- subset(combined, cell_type != "Exclude")
+cell.idents <- data.frame(cluster_id = combined$seurat_clusters,
+                          sample_id = combined$orig.ident,
+                          group_id = combined$stim,
+                          cluster_type = combined$cell_type
+                          )
+
+cell.agg <- cell.idents %>%
+  group_by(group_id, sample_id) %>%
+  mutate(sample_size = length(sample_id)) %>%
+  group_by(group_id, sample_id, cluster_type) %>%
+  mutate(cluster_size = length(cluster_type)) %>%
+  mutate(cluster_proportion = cluster_size/sample_size) %>%
+  distinct()
+
+bwplot(cluster_proportion ~ group_id|cluster_type, cell.agg,
+       layout=c(3,2), scale = list(x=list(rot=60)))
+
+bwplot(cluster_proportion ~ cluster_type|group_id, cell.agg,
+       layout=c(3,1), scale = list(x=list(rot=60)))
+
+
+dotplot(cluster_proportion ~ group_id|cluster_type, cell.agg,
+       layout=c(3,2), scale = list(x=list(rot=60)))
+
+bwplot(paste(cluster_type, group_id, sep = "  ---   ") ~ cluster_proportion, cell.agg)
+
+```
+
+
+
+
+

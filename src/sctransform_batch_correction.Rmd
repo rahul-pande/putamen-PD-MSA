@@ -1,0 +1,80 @@
+---
+title: "Neurons WGCNA"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "../")
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(caret)
+library(hash)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(stringi)
+library(gplots)
+library(flashClust)
+library(ape)
+
+set.seed(12345)
+```
+
+
+```{r}
+data_celltypes <- readRDS("../data/overall_clustered_data/data_celltypes_annotated.rds")
+sample_attributes <- read.csv("../data/auxiliary_data/putamen_sample_attributes.txt",
+                              sep = "\t", stringsAsFactors = F)
+```
+
+
+```{r}
+meta_data <- data_celltypes@meta.data
+sortday_meta_data <- meta_data %>%
+  tibble::rownames_to_column("rownames") %>%
+  left_join(sample_attributes, by = c("orig.ident" = "Sample.name")) %>%
+  tibble::column_to_rownames("rownames") %>%
+  select(sort_day)
+
+data_celltypes <- AddMetaData(data_celltypes, sortday_meta_data)
+```
+
+```{r warning=FALSE}
+data_celltypes_corrected <- SCTransform(data_celltypes,
+                                        vars.to.regress = c("sort_day"),
+                                        return.only.var.genes = FALSE,
+                                        verbose = TRUE)
+
+
+saveRDS(data_celltypes_corrected, "../data/overall_clustered_data/data_celltypes_corrected_sort_day.rds")
+
+# data_celltypes_corrected <- readRDS("../data/overall_clustered_data/data_celltypes_corrected_sort_day.rds")
+```
+
+```{r}
+VlnPlot(data_celltypes_corrected,
+        features = c("nFeature_SCT", "nCount_SCT"),
+        pt.size = 0.01, split.by = "stim")
+```
+
+
+```{r}
+subsets <- list(
+  "data_oligodendrocyte_deep_corrected_sort_day.rds" = c("Oligodendrocyte"),
+  "data_olig_opc_deep_corrected_sort_day.rds" = c("Oligodendrocyte", "OPC"),
+  "data_neurons_deep_corrected_sort_day.rds" = c("Neuron"),
+  "data_microglia_deep_corrected_sort_day.rds" = c("Microglia"),
+  "data_astrocyte_deep_corrected_sort_day.rds" = c("Astrocyte")
+)
+
+for(filename in names(subsets)){
+  inter <- subset(data_celltypes_corrected, idents = subsets[[filename]])
+  saveRDS(inter,
+          paste0("../data/clustered_data/", filename))
+}
+```

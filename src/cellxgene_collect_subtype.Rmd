@@ -1,0 +1,74 @@
+---
+title: "R Notebook - putamen subtype clustering"
+output:
+  pdf_document: default
+  # html_notebook: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+library("knitr")
+knitr::opts_knit$set(root.dir = "../")
+# knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.retina = T)
+```
+
+```{r echo=FALSE, message=FALSE}
+library(Seurat)
+library(dplyr)
+
+set.seed(12345)
+```
+
+
+```{r}
+data_celltypes <- readRDS("../data/overall_clustered_data/data_celltypes_annotated.rds")
+data_celltypes$cell_type <- Idents(data_celltypes)
+```
+
+```{r}
+putamen_neurons <- readRDS("../data/clustered_data/putamen_neurons.rds")
+Idents(putamen_neurons) <- "cell_type"
+
+putamen_astrocytes <- readRDS("../data/clustered_data/putamen_astrocytes.rds")
+Idents(putamen_astrocytes) <- "cell_type"
+
+putamen_microglia <- readRDS("../data/clustered_data/putamen_microglia.rds")
+Idents(putamen_microglia) <- "cell_type"
+
+```
+
+```{r}
+original_annotation <- data.frame(type = data_celltypes$cell_type) %>%
+  tibble::rownames_to_column("cell_name")
+neurons_annotation <- data.frame(type = putamen_neurons$cell_type) %>%
+  tibble::rownames_to_column("cell_name")
+astrocytes_annotation <- data.frame(type = putamen_astrocytes$cell_type) %>%
+  tibble::rownames_to_column("cell_name")
+microglia_annotation <- data.frame(type = putamen_microglia$cell_type) %>%
+  tibble::rownames_to_column("cell_name")
+
+subtype_metadata <- original_annotation %>%
+  dplyr::left_join(y = neurons_annotation, by="cell_name") %>%
+  mutate(type = coalesce(type.y, type.x)) %>%
+  select(type, cell_name) %>%
+  
+  dplyr::left_join(y = astrocytes_annotation, by="cell_name") %>%
+  mutate(type = coalesce(type.y, type.x)) %>%
+  select(type, cell_name) %>%
+  
+  dplyr::left_join(y = microglia_annotation, by="cell_name") %>%
+  mutate(type = coalesce(type.y, type.x)) %>%
+  
+  tibble::column_to_rownames("cell_name") %>%
+  rename(sub_type = type) %>%
+  select(sub_type)
+  
+```
+
+```{r}
+data_celltypes <- AddMetaData(data_celltypes, metadata = subtype_metadata)
+
+data_celltypes <- subset(data_celltypes, sub_type != "Exclude")
+data_celltypes@meta.data <- droplevels(data_celltypes@meta.data)
+
+saveRDS(data_celltypes, "../data/overall_clustered_data/data_subtypes_cellxgene.rds")
+```
