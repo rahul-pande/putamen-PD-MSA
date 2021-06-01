@@ -1,0 +1,267 @@
+---
+title: "integrated analyses for all samples"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+#this integration approach groups all samples, then assigns cell types by cluster
+install.packages("hash")
+library(Seurat)
+library(dplyr)
+library(hash)
+library(magrittr)
+library(tidyr)
+library(stringi)
+library(gplots)
+#Using seurat version 3.1
+library(data.table)
+library(ggplot2)
+library(cowplot)
+library(RColorBrewer)
+library(sctransform)
+library(patchwork)
+library(Matrix)
+
+set.seed(12345)
+
+print("final manuscript code")
+
+```
+
+```{r}
+# Protein coding gene list no chr XY from ENSEMBL BioMART.
+all_genes <- read.table("pc_genes_ensemble_biomart02082021.txt", sep='\t', header=TRUE) 
+
+# this code downloads pc gene 
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("biomaRt")
+
+#library(biomaRt)  
+#mart <- useMart(biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl", host = 'www.ensembl.org')
+#genes <- biomaRt::getBM(attributes = c("external_gene_name", "chromosome_name","transcript_biotype"), filters = c("transcript_biotype","chromosome_name"),values = list("protein_coding",c(1:22)), mart = mart)
+```
+```{r}
+# Taking protein coding genes
+pc_genes<-all_genes$external_gene_name
+#ctr1.subset<-ctr1[intersect(rownames(ctr1), pc_genes),]
+# this is done after filtering for percent mito below
+```
+
+
+```{r}
+#Control
+ctr1 <-Read10X_h5("sample1_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+ctr3 <-Read10X_h5("sample3_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+ctr8 <-Read10X_h5("sample8_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+
+
+ctr1 <- CreateSeuratObject(ctr1, project = "CTR1", min.cells = 5)
+ctr1$stim <- "Control"
+ctr3 <- CreateSeuratObject(ctr3, project = "CTR3", min.cells = 5)
+ctr3$stim <- "Control"
+ctr8 <- CreateSeuratObject(ctr8, project = "CTR8", min.cells = 5)
+ctr8$stim <- "Control"
+
+#PD
+pd2 <- Read10X_h5("sample2_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+pd4 <- Read10X_h5("sample4_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+pd9 <- Read10X_h5("sample9_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+
+pd2 <- CreateSeuratObject(pd2, project = "PD2", min.cells = 5)
+pd2$stim <- "PD"
+pd4 <- CreateSeuratObject(pd4, project = "PD4", min.cells = 5)
+pd4$stim <- "PD"
+pd9 <- CreateSeuratObject(pd9, project = "PD9", min.cells = 5)
+pd9$stim <- "PD"
+
+
+#MSA
+msa5 <- Read10X_h5("sample5_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+msa7 <- Read10X_h5("sample7_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+msa10 <- Read10X_h5("sample10_filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+
+msa5 <- CreateSeuratObject(msa5, project = "MSA5", min.cells = 5)
+msa5$stim <- "MSA"
+msa7 <- CreateSeuratObject(msa7, project = "MSA7", min.cells = 5)
+msa7$stim <- "MSA"
+msa10 <- CreateSeuratObject(msa10, project = "MSA10", min.cells = 5)
+msa10$stim <- "MSA"
+```
+
+```{r}
+# Protein coding gene list no chr XY from ENSEMBL BioMART.
+#all_genes <- read.table("pc_genes_ensemble_biomart02082021.txt", sep='\t') 
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("biomaRt")
+
+#library(biomaRt)  
+#mart <- useMart(biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl", host = 'www.ensembl.org')
+#genes <- biomaRt::getBM(attributes = c("external_gene_name", "chromosome_name","transcript_biotype"), filters = c("transcript_biotype","chromosome_name"),values = list("protein_coding",c(1:22)), mart = mart)
+
+```
+
+```{r}
+
+#ctr1.subset<-ctr1[intersect(rownames(ctr1), pc_genes),]
+ctr1
+```
+```{r}
+#ctr3.subset<-ctr3[intersect(rownames(ctr3), pc_genes),]
+ctr3
+```
+```{r}
+#ctr6
+```
+```{r}
+#ctr8.subset<-ctr8[intersect(rownames(ctr8), pc_genes),]
+ctr8
+```
+```{r}
+#msa10.subset<-msa10[intersect(rownames(msa10), pc_genes),]
+msa10
+```
+
+
+```{r}
+#msa5.subset<-msa5[intersect(rownames(msa5), pc_genes),]
+msa5
+```
+```{r}
+#msa7.subset<-msa7[intersect(rownames(msa7), pc_genes),]
+msa7
+```
+```{r}
+#pd2.subset<-pd2[intersect(rownames(pd2), pc_genes),]
+pd2
+```
+```{r}
+#pd4.subset<-pd4[intersect(rownames(pd4), pc_genes),]
+pd4
+```
+```{r}
+#pd9.subset<-pd9[intersect(rownames(pd9), pc_genes),]
+pd9
+```
+```{r}
+print('ctr1')
+ctr1
+print('ctr3')
+ctr3
+print('ctr8')
+ctr8
+print('pd2')
+pd2
+print('pd4')
+pd4
+print('pd9')
+pd9
+print('msa5')
+msa5
+print('msa7')
+msa7
+print('msa10')
+msa10
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#QC
+
+combined.list <- c(ctr1, ctr3, ctr8, pd2, pd4, pd9, msa5, msa7, msa10)
+combined.list<-lapply(X=combined.list, FUN=function(x){
+  x[["percent.mt"]]<-PercentageFeatureSet(x,pattern="^MT-")
+  print(VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3, pt.size=0))
+  x<-subset(x, nFeature_RNA>200 & nFeature_RNA<9000 & percent.mt<5)
+  x<-x[intersect(rownames(x), pc_genes),]
+  x<-NormalizeData(x, verbose=FALSE)
+  x<-FindVariableFeatures(x, selection.method="vst", nfeatures = 2000, verbose=FALSE)
+  print(VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3, pt.size=0))
+  print(x)
+})
+```
+
+```{r}
+print('ctr1')
+ctr1
+print('ctr3')
+ctr3
+print('ctr8')
+ctr8
+print('pd2')
+pd2
+print('pd4')
+pd4
+print('pd9')
+pd9
+print('msa5')
+msa5
+print('msa7')
+msa7
+print('msa10')
+msa10
+
+```
+```{r}
+combined.anchors <-FindIntegrationAnchors(object.list = combined.list, dims=1:20)
+combined.integrated <- IntegrateData(anchorset = combined.anchors, dims=1:20)
+DefaultAssay(combined.integrated)<-"integrated"
+```
+```{r}
+combined.integrated<-ScaleData(combined.integrated, verbose=FALSE)
+combined.integrated<-RunPCA(combined.integrated, npcs=20, verbose="FALSE")
+#DimPlot(combined.integrated, reduction="tsne", group.by = "orig.ident")
+
+#elbow plot to determine the number of PCs to be used going forward
+ElbowPlot(combined.integrated, ndims = 40)
+VlnPlot(object = combined.integrated, features = c("nFeature_RNA", "nCount_RNA", "mito_percent"), ncol = 3, pt.size = 0)
+```
+
+
+```{r}
+#Clustering and visualization(using tSNE and UMAP); resolution can vary
+#backup<-combined
+combined <- FindNeighbors(combined.integrated, dims = 1:20)
+#0.8 used for paper analysis
+combined <- FindClusters(combined, resolution = 0.8)
+combined <- RunUMAP(combined, dims = 1:20)
+combined <- RunTSNE(combined, dims = 1:20)
+
+#saving the object
+saveRDS(combined,"CTR_MSA_PD_clusters_9sample_020921_RES0_8_Feat2000.rds")
+
+#visualization using tSNE and UMAP
+DimPlot(combined, reduction = "tsne", label = TRUE)+NoAxes()
+DimPlot(combined, reduction = "tsne", label = FALSE)+NoAxes()
+DimPlot(combined, reduction="tsne", split.by = "orig.ident")+NoAxes()
+DimPlot(combined, reduction="tsne", group.by="orig.ident")+NoAxes()
+DimPlot(combined, reduction="tsne", group.by="stim")+NoAxes()
+```
+
+
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
